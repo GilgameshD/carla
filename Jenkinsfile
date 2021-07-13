@@ -21,7 +21,7 @@ pipeline
                     JOB_ID = "${env.BUILD_TAG}"
                     jenkinsLib = load("/home/jenkins/jenkins_426.groovy")
 
-                    jenkinsLib.CreateUbuntuBuildNode(JOB_ID)
+                    // jenkinsLib.CreateUbuntuBuildNode(JOB_ID)
                     jenkinsLib.CreateWindowsBuildNode(JOB_ID)
                 }
             }
