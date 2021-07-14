@@ -11,328 +11,35 @@ pipeline
 
     stages
     {
-        stage('Creating nodes')
+        stage('windows')
         {
-            agent { label "master" }
-            steps
+            agent { label "windows && build && vs2019" }
+            environment
             {
-                script
-                {
-                    JOB_ID = "${env.BUILD_TAG}"
-                    jenkinsLib = load("/home/jenkins/jenkins_426.groovy")
-
-                    // jenkinsLib.CreateUbuntuBuildNode(JOB_ID)
-                    jenkinsLib.CreateWindowsBuildNode(JOB_ID)
-                }
+                UE4_ROOT = 'C:\\UE_4.26'
             }
-        }
-        stage('Building CARLA')
-        {
-            parallel
+            stages
             {
-                stage('ubuntu')
+                stage('windows build')
                 {
-                    agent { label "ubuntu && build && ${JOB_ID}" }
-                    environment
+                    steps
                     {
-                        UE4_ROOT = '/home/jenkins/UnrealEngine_4.26'
-                    }
-                    stages
-                    {
-                        stage('ubuntu setup')
-                        {
-                            steps
-                            {
-                                sh 'git update-index --skip-worktree Unreal/CarlaUE4/CarlaUE4.uproject'
-                                sh 'make setup ARGS="--python-version=3.7,2 --chrono"'
-                            }
-                        }
-                        stage('ubuntu build')
-                        {
-                            steps
-                            {
-                                sh 'make LibCarla'
-                                sh 'make PythonAPI ARGS="--python-version=3.7,2"'
-                                sh 'make CarlaUE4Editor ARGS="--chrono"'
-                                sh 'make plugins'
-                                sh 'make examples'
-                            }
-                            post
-                            {
-                                always
-                                {
-                                    archiveArtifacts 'PythonAPI/carla/dist/*.egg'
-                                    stash includes: 'PythonAPI/carla/dist/*.egg', name: 'ubuntu_eggs'
-                                }
-                            }
-                        }
-                        stage('ubuntu unit tests')
-                        {
-                            steps
-                            {
-                                sh 'make check ARGS="--all --xml --python-version=3.7,2"'
-                            }
-                            post
-                            {
-                                always
-                                {
-                                    junit 'Build/test-results/*.xml'
-                                    archiveArtifacts 'profiler.csv'
-                                }
-                            }
-                        }
-                        stage('ubuntu retrieve content')
-                        {
-                            steps
-                            {
-                                sh './Update.sh'
-                            }
-                        }
-                        stage('ubuntu package')
-                        {
-                            steps
-                            {
-                                sh 'make package ARGS="--python-version=3.7,2 --chrono"'
-                                sh 'make package ARGS="--packages=AdditionalMaps,Town06_Opt,Town07_Opt,Town10HD_Opt --target-archive=AdditionalMaps --clean-intermediate --python-version=3.7,2"'
-                                sh 'make examples ARGS="localhost 3654"'
-                            }
-                            post
-                            {
-                                always
-                                {
-                                    archiveArtifacts 'Dist/*.tar.gz'
-                                    stash includes: 'Dist/CARLA*.tar.gz', name: 'ubuntu_package'
-                                    stash includes: 'Dist/AdditionalMaps*.tar.gz', name: 'ubuntu_package2'
-                                    stash includes: 'Examples/', name: 'ubuntu_examples'
-                                }
-                                success
-                                {
-                                    node('master')
-                                    {
-                                        script
-                                        {
-                                            JOB_ID = "${env.BUILD_TAG}"
-                                            jenkinsLib = load("/home/jenkins/jenkins_426.groovy")
-
-                                            jenkinsLib.CreateUbuntuTestNode(JOB_ID)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        stage('ubuntu smoke tests')
-                        {
-                            agent { label "ubuntu && gpu && ${JOB_ID}" }
-                            steps
-                            {
-                                unstash name: 'ubuntu_eggs'
-                                unstash name: 'ubuntu_package'
-                                unstash name: 'ubuntu_package2'
-                                unstash name: 'ubuntu_examples'
-                                sh 'tar -xvzf Dist/CARLA*.tar.gz -C Dist/'
-                                sh 'tar -xvzf Dist/AdditionalMaps*.tar.gz -C Dist/'
-                                sh 'DISPLAY= ./Dist/CarlaUE4.sh -nullrhi -RenderOffScreen --carla-rpc-port=3654 --carla-streaming-port=0 -nosound > CarlaUE4.log &'
-                                sh 'make smoke_tests ARGS="--xml --python-version=3.7,2"'
-                                sh 'make run-examples ARGS="localhost 3654"'
-                            }
-                            post
-                            {
-                                always
-                                {
-                                    archiveArtifacts 'CarlaUE4.log'
-                                    junit 'Build/test-results/smoke-tests-*.xml'
-                                    deleteDir()
-                                    node('master')
-                                    {
-                                        script
-                                        {
-                                            JOB_ID = "${env.BUILD_TAG}"
-                                            jenkinsLib = load("/home/jenkins/jenkins_426.groovy")
-
-                                            jenkinsLib.DeleteUbuntuTestNode(JOB_ID)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        stage('ubuntu deploy dev')
-                        {
-                            when { branch "dev"; }
-                            steps
-                            {
-                                sh 'git checkout .'
-                                sh 'make deploy ARGS="--replace-latest"'
-                            }
-                        }
-                        stage('ubuntu deploy master')
-                        {
-                            when { anyOf { branch "master"; buildingTag() } }
-                            steps
-                            {
-                                sh 'git checkout .'
-                                sh 'make deploy ARGS="--replace-latest --docker-push"'
-                            }
-                        }
-                        stage('ubuntu Doxygen')
-                        {
-                            when { anyOf { branch "master"; buildingTag() } }
-                            steps
-                            {
-                                sh 'rm -rf ~/carla-simulator.github.io/Doxygen'
-                                sh '''
-                                    cd ~/carla-simulator.github.io
-                                    git remote set-url origin git@github.com:carla-simulator/carla-simulator.github.io.git
-                                    git fetch
-                                    git checkout -B master origin/master
-                                '''
-                                sh 'make docs'
-                                sh 'cp -rf ./Doxygen ~/carla-simulator.github.io/'
-                                sh '''
-                                    cd ~/carla-simulator.github.io
-                                    git add Doxygen
-                                    git commit -m "Updated c++ docs" || true
-                                    git push
-                                '''
-                            }
-                            post
-                            {
-                                always
-                                {
-                                    deleteDir()
-                                }
-                            }
-                        }
-                    }
-                    post
-                    {
-                        always
-                        {
-                            deleteDir()
-
-                            node('master')
-                            {
-                                script
-                                {
-                                    JOB_ID = "${env.BUILD_TAG}"
-                                    jenkinsLib = load("/home/jenkins/jenkins_426.groovy")
-
-                                    jenkinsLib.DeleteUbuntuBuildNode(JOB_ID)
-                                }
-                            }
-                        }
-                    }
-                }
-                stage('windows')
-                {
-                    agent { label "windows && build && ${JOB_ID}" }
-                    environment
-                    {
-                        UE4_ROOT = 'C:\\UE_4.26'
-                    }
-                    stages
-                    {
-                        stage('windows setup')
-                        {
-                            steps
-                            {
-                                bat """
-                                    call ../setEnv64.bat
-                                    git update-index --skip-worktree Unreal/CarlaUE4/CarlaUE4.uproject
-                                """
-                                bat """
-                                    call ../setEnv64.bat
-                                    make setup ARGS="--chrono"
-                                """
-                            }
-                        }
-                        stage('windows build')
-                        {
-                            steps
-                            {
-                                bat """
-                                    call ../setEnv64.bat
-                                    make LibCarla
-                                """
-                                bat """
-                                    call ../setEnv64.bat
-                                    make PythonAPI
-                                """
-                                bat """
-                                    call ../setEnv64.bat
-                                    make CarlaUE4Editor ARGS="--chrono"
-                                """
-                                bat """
-                                    call ../setEnv64.bat
-                                    make plugins
-                                """
-                            }
-                            post
-                            {
-                                always
-                                {
-                                    archiveArtifacts 'PythonAPI/carla/dist/*.egg'
-                                    stash includes: 'PythonAPI/carla/dist/*.egg', name: 'windows_eggs'
-                                }
-                            }
-                        }
-                        stage('windows retrieve content')
-                        {
-                            steps
-                            {
-                                bat """
-                                    call ../setEnv64.bat
-                                    call Update.bat
-                                """
-                            }
-                        }
-                        stage('windows package')
-                        {
-                            steps
-                            {
-                                bat """
-                                    call ../setEnv64.bat
-                                    make package ARGS="--chrono"
-                                """
-                                bat """
-                                    call ../setEnv64.bat
-                                    make package ARGS="--packages=AdditionalMaps,Town06_Opt,Town07_Opt,Town10HD_Opt --target-archive=AdditionalMaps --clean-intermediate"
-                                """
-                            }
-                            post {
-                                always {
-                                    archiveArtifacts 'Build/UE4Carla/*.zip'
-                                }
-                            }
-                        }
-                        stage('windows deploy')
-                        {
-                            when { anyOf { branch "master"; branch "dev"; buildingTag() } }
-                            steps {
-                                bat """
-                                    call ../setEnv64.bat
-                                    git checkout .
-                                    make deploy ARGS="--replace-latest"
-                                """
-                            }
-                        }
-                    }
-                    post
-                    {
-                        always
-                        {
-                            deleteDir()
-
-                            node('master')
-                            {
-                                script
-                                {
-                                    JOB_ID = "${env.BUILD_TAG}"
-                                    jenkinsLib = load("/home/jenkins/jenkins_426.groovy")
-
-                                    jenkinsLib.DeleteWindowsBuildNode(JOB_ID)
-                                }
-                            }
-                        }
+                        // bat """
+                        //     call ../setEnv64.bat
+                        //     make LibCarla
+                        // """
+                        // bat """
+                        //     call ../setEnv64.bat
+                        //     make PythonAPI
+                        // """
+                        bat """
+                            call ../setEnv64.bat
+                            make CarlaUE4Editor"
+                        """
+                        // bat """
+                        //     call ../setEnv64.bat
+                        //     make plugins
+                        // """
                     }
                 }
             }
